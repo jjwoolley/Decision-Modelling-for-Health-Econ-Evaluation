@@ -11,7 +11,7 @@ s_names<-c('A',"B", 'C', 'D')
 #cannot follow the exact distributions from book
 #not sure which shape parameters
 
-
+#test
 
 
 
