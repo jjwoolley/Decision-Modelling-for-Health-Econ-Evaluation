@@ -1,7 +1,7 @@
 #Decision Modelling for Health Economic Evaluation
 #By Briggs, Blaxton, and Sculpher
 
-
+rm(list=ls())
 
 
 #Exercise 2.5
@@ -55,7 +55,7 @@ cAZT<-2278 #Zidovudine drug cost
 cLam<-2087 #Lamivudine drug cost
 
 #Other parameters
-RR<- 0.509 #treatment effect of Combination treatment vs monotherapy 
+rr<- 0.509 #treatment effect of Combination treatment vs monotherapy 
     #changes transition probabilities by RR
 
 cDR<-0.06 #annual discount rate of costs
@@ -67,6 +67,8 @@ v_u<-c(A=1,B=1,C=1,D=0)
 #state costs vector
 v_c_Monotherapy<-c(A=dmca+ccca+cAZT,B=dmcb+cccb+cAZT,C=dmcc+cccc+cAZT,D=0)
 v_c_Combination<-c(A=dmca+ccca+cAZT+cLam,B=dmcb+cccb+cAZT+cLam,C=dmcc+cccc+cAZT+cLam,D=0)
+
+
 
 
 ##### Matrix Setups #####
@@ -105,78 +107,195 @@ for(t in 1:n_t){
 
 mM_monotherapy<-mM[-1,]
 
-#calculate life years 
-LY_Monotherapy<-sum(mM[2:21,c('A','B','C')])
-
 #calculate costs
 Costs_Monotherapy<-sum(mM[2:21,"A"])*(dmca+ccca+cAZT)+
   sum(mM[2:21,'B'])*(dmcb+cccb+cAZT) +
   sum(mM[2:21,'C'])*(dmcc+cccc+cAZT) 
 
-u<-sum(mM_monotherapy %*% v_u)
-cc<-mM_monotherapy %*% v_c_Monotherapy
-c<-sum(mM_monotherapy %*% v_c_Monotherapy)
+yearly_costs_Monotherapy<-mM_monotherapy %*% v_c_Monotherapy
+total_cost_Monotherapy<-sum(mM_monotherapy %*% v_c_Monotherapy)
 
-
-#discounted costs
+#costs with discounting
 v_dwc<-1/((1+cDR)^(1:(n_t)))
 
-sum(t(cc) %*% v_dwc)
+totalcost_discounted_Monotherapy<-sum(t(yearly_costs_Monotherapy) %*% v_dwc)
+
+#life years
+LY__Monotherapy<-sum(mM_monotherapy %*% v_u)
+
+
+
+############# Combination ###########
+
+#many values below taken as the same from monotherapy matrices
 
 
 
 
+mM_comb<- matrix(0,
+            nrow=(n_t+1), ncol=n_states,
+            dimnames=list(0:n_t,v_n))
+mM_comb[1,]<-v_s_init
 
+
+m_P_comb_beg<-matrix(0,
+            nrow=n_states, ncol=n_states,
+            dimnames=list(v_n,v_n))
+
+m_P_comb_beg["A","A"]<-1-tpA2B*rr-tpA2C*rr-tpA2D*rr
+m_P_comb_beg["A","B"]<-tpA2B*rr
+m_P_comb_beg['A',"C"]<-tpA2C*rr
+m_P_comb_beg['A','D']<-tpA2D*rr
+m_P_comb_beg['B','B']<-1-tpB2C*rr-tpB2D*rr
+m_P_comb_beg['B','C']<-tpB2C*rr
+m_P_comb_beg["B","D"]<-tpB2D*rr
+m_P_comb_beg['C','C']<-1-tpC2D*rr
+m_P_comb_beg['C','D']<-tpC2D*rr
+m_P_comb_beg['D','D']<-1
+
+for(t in 1:n_t){
+  ifelse(t==1|t==2, mM_comb[t + 1, ] <- mM_comb[t, ] %*% m_P_comb_beg,
+         mM_comb[t + 1, ] <- mM_comb[t, ] %*% m_P)
+}
+
+#delete initial state distribution before analysis
+mM_Combination<-mM_comb[-1,]
+
+#no discounting total cost
+Costs_comb<-sum(mM_Combination[1:2,"A"])*(dmca+ccca+cAZT+cLam)+
+  sum(mM_Combination[1:2,'B'])*(dmcb+cccb+cAZT+cLam) +
+  sum(mM_Combination[1:2,'C'])*(dmcc+cccc+cAZT+cLam)+
+  sum(mM_Combination[3:20,"A"])*(dmca+ccca+cAZT)+
+  sum(mM_Combination[3:20,"B"])*(dmcb+cccb+cAZT)+
+  sum(mM_Combination[3:20,"C"])*(dmcc+cccc+cAZT)
+
+#yearly cost
+yearly_costs_Monotherapy<-mM_monotherapy %*% v_c_Monotherapy
+yearly_costs_comb<-cbind(c(mM_Combination[1:2,] %*% v_c_Combination,
+                           mM_Combination[3:20,]%*%v_c_Monotherapy))
+
+#costs with discounting
+totalcost_discounted_comb<-sum(t(yearly_costs_comb) %*% v_dwc)
+
+#life years
+LY_Comb<-sum(mM_Combination %*% v_u)
+
+
+#Incremental cost effectiveness ratio
+ICER<-(totalcost_discounted_comb-totalcost_discounted_Monotherapy)/
+  (LY_Comb-LY_Monotherapy)
 
 ################ HEEMOD ##################
+
 library(heemod)
-s_names<-c('A',"B", 'C', 'D')
-mat_trans<-define_transition(
-  tpA2A,tpA2B,tpA2C,tpA2D,
-  0,tpB2B,tpB2C,tpB2D,
-  0,0,tpC2C,tpC2D,
-  0,0,0,1,
-  state_names = s_names
+#copied from online
+#https://cran.r-project.org/web/packages/heemod/vignettes/i_reproduction.html
+
+par_mod <- define_parameters(
+  rr = ifelse(markov_cycle <= 2, .509, 1),
+  cost_lami = ifelse(markov_cycle <= 2, 2086.5, 0),
+  cost_zido = 2278
 )
 
-s_A<-define_state(
-  cost=dmca+ccca+cAZT,
-  utility=1
+mat_mono <- define_transition(
+  1251/1734, 350/1734, 116/1734,  17/1734,
+  0,         731/1258, 512/1258,  15/1258,
+  0,         0,        1312/1749, 437/1749,
+  0,         0,        0,         1.00
+)
+## No named state -> generating names.
+mat_comb <- define_transition(
+  C, 350/1734*rr, 116/1734*rr, 17/1734*rr,
+  0, C,           512/1258*rr, 15/1258*rr,
+  0, 0,           C,           437/1749*rr,
+  0, 0,           0,           1.00)
+
+
+A_mono <- define_state(
+  cost_health = 2756,
+  cost_drugs = cost_zido,
+  cost_total = discount(
+    cost_health + cost_drugs, .06, first = T),
+  life_year = 1
+)
+B_mono <- define_state(
+  cost_health = 3052,
+  cost_drugs = cost_zido,
+  cost_total = discount(
+    cost_health + cost_drugs, .06, first = T),
+  life_year = 1
+)
+C_mono <- define_state(
+  cost_health = 9007,
+  cost_drugs = cost_zido,
+  cost_total = discount(
+    cost_health + cost_drugs, .06, first = T),
+  life_year = 1
+)
+D_mono <- define_state(
+  cost_health = 0,
+  cost_drugs = 0,
+  cost_total = discount(
+    cost_health + cost_drugs, .06, first = T),
+  life_year = 0
 )
 
-s_B<-define_state(
-  cost=dmcb+cccb+cAZT,
-  utility=1
+A_comb <- define_state(
+  cost_health = 2756,
+  cost_drugs = cost_zido + cost_lami,
+  cost_total = discount(
+    cost_health + cost_drugs, .06, first = T),
+  life_year = 1
+)
+B_comb <- define_state(
+  cost_health = 3052,
+  cost_drugs = cost_zido + cost_lami,
+  cost_total = discount(
+    cost_health + cost_drugs, .06, first = T),
+  life_year = 1
+)
+C_comb <- define_state(
+  cost_health = 9007,
+  cost_drugs = cost_zido + cost_lami,
+  cost_total = discount(
+    cost_health + cost_drugs, .06, first = T),
+  life_year = 1
+)
+D_comb <- define_state(
+  cost_health = 0,
+  cost_drugs = 0,
+  cost_total = discount(
+    cost_health + cost_drugs, .06, first = T),
+  life_year = 0
 )
 
-s_C<-define_state(
-  cost=dmcc+cccc+cAZT,
-  utility=1
+mod_mono <- define_strategy(
+  transition = mat_mono,
+  A_mono,
+  B_mono,
+  C_mono,
+  D_mono
 )
-
-s_D<-define_state(
-  cost=0,
-  utility=0
+## No named state -> generating names.
+mod_comb <- define_strategy(
+  transition = mat_comb,
+  A_comb,
+  B_comb,
+  C_comb,
+  D_comb
 )
-
-
-strat_monotherapy<-define_strategy(
-  transition=mat_trans,
-  A=s_A,
-  B=s_B,
-  C=s_C,
-  D=s_D
+## No named state -> generating names.
+res_mod <- run_model(
+  mono = mod_mono,
+  comb = mod_comb,
+  parameters = par_mod,
+  cycles = 20,
+  cost = cost_total,
+  effect = life_year,
+  method = "beginning",
+  init = c(1, 0, 0, 0)
 )
-
-res_mod<-run_model(
-  method="beginning",
-  strat_monotherapy,
-  init=c(1,0,0,0),
-  cycles=20,
-  cost=cost,
-  effect=utility
-)
-
 summary(res_mod)
 
-get_counts(res_mod)
+
+get_counts(res_mod,comb) 
